@@ -113,7 +113,7 @@ def test_rdump_format_template(tmp_path: Path) -> None:
     args = ["rdump", str(path), "-f", "TEST: {count},{foo}"]
     print(args)
     res = subprocess.Popen(args, stdout=subprocess.PIPE)
-    stdout, stderr = res.communicate()
+    stdout, _ = res.communicate()
     for i, line in enumerate(stdout.decode().splitlines()):
         assert line == f"TEST: {i},bar"
 
@@ -155,7 +155,7 @@ def test_rdump_json(tmp_path: Path) -> None:
     # dump records as JSON lines
     args = ["rdump", str(record_path), "-w", "jsonfile://-?descriptors=true"]
     process = subprocess.Popen(args, stdout=subprocess.PIPE)
-    stdout, stderr = process.communicate()
+    stdout, _ = process.communicate()
 
     assert process.returncode == 0
 
@@ -762,3 +762,38 @@ def test_record_rdump_stats(tmp_path: Path, capsys: pytest.CaptureFixture) -> No
     rdump.main(["--list", "--stats", str(tmp_path / "test.records")])
     captured = capsys.readouterr()
     assert "Processed 100 records (matched=100, unmatched=0)" in captured.out
+
+
+@pytest.mark.skipif(platform.system() == "Windows", reason="skipping this test on Windows")
+def test_rdump_catch_sigpipe(tmp_path: Path) -> None:
+    """Test if rdump properly suppresses BrokenPipeError when writing to a closed file handle."""
+
+    TestRecord = RecordDescriptor(
+        "test/record",
+        [
+            ("varint", "count"),
+            ("string", "foo"),
+        ],
+    )
+
+    path = tmp_path / "test.records"
+    with RecordWriter(path) as writer:
+        for i in range(10):
+            writer.write(TestRecord(count=i, foo="bar"))
+
+    # rdump test.records | head -n 2
+    proc = subprocess.Popen(
+        f"rdump {path} | head -n 2",
+        shell=True,
+        text=True,
+        stderr=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+
+    stdout, stderr = proc.communicate()
+    exit_code = proc.wait()
+    assert exit_code == 0
+    assert stderr == ""  # We don't expect any BrokenPipeError
+    assert "test/record count=0" in stdout
+    assert "test/record count=1" in stdout
+    assert len(stdout.splitlines()) == 2
